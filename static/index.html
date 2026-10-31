@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dindarshika: AI Event Planner</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body data-event="">
+  <div id="backdrop" aria-hidden="true"></div>
+  <header>
+    <h1><span aria-hidden="true">🪔</span> Dindarshika</h1>
+    <div class="hd">
+      <button id="reset" type="button">Start over</button>
+      <label for="lang" id="lang-label">Language</label>
+      <select id="lang"></select>
+    </div>
+  </header>
+  <main>
+    <div class="left">
+      <section class="card chat" aria-label="Planner chat">
+        <div id="log" role="log" aria-live="polite" tabindex="0"></div>
+        <div id="opts" role="group" aria-label="Choices"></div>
+      </section>
+      <section class="card" aria-labelledby="h-tips">
+        <h2 id="h-tips">Smart tips</h2>
+        <ul id="alerts"></ul>
+        <div id="tips"></div>
+      </section>
+      <section class="card" aria-labelledby="h-tasks">
+        <h2 id="h-tasks">Pending tasks</h2>
+        <ul id="tasks"></ul>
+      </section>
+    </div>
+    <div class="right">
+      <section class="card" aria-labelledby="h-ground">
+        <h2 id="h-ground">Main ground</h2>
+        <div id="ground" class="ground" role="img" aria-label="Main ground"><p id="ground-hint" class="hint"></p></div>
+        <p id="next-up"></p>
+      </section>
+      <div class="below">
+        <section class="memo-wrap" aria-labelledby="h-memo">
+          <div class="memo">
+            <div class="memo-top"><h2 id="h-memo">Cash memo</h2><span id="memo-name"></span><span id="memo-date"></span></div>
+            <ul id="memo-lines"></ul>
+            <dl id="memo-sum">
+              <div><dt id="k-budget">Budget</dt><dd id="v-budget">₹0</dd></div>
+              <div><dt id="k-spent">Paid so far</dt><dd id="v-spent">₹0</dd></div>
+              <div><dt id="k-pending">Still to pay</dt><dd id="v-pending">₹0</dd></div>
+              <div class="grand"><dt id="k-planned">Total planned</dt><dd><b id="delta"></b><span id="v-planned">₹0</span></dd></div>
+              <div class="bal"><dt id="k-balance">Balance</dt><dd id="v-balance">₹0</dd></div>
+            </dl>
+            <p id="memo-stamp" class="stamp" hidden></p>
+            <p id="memo-live" class="sr" aria-live="polite"></p>
+          </div>
+        </section>
+        <section class="card" aria-labelledby="h-cal">
+          <div class="cal-head">
+            <h2 id="h-cal">Calendar</h2>
+            <div class="cal-nav">
+              <button id="cal-prev" type="button" aria-label="Previous month">‹</button>
+              <span id="cal-month"></span>
+              <button id="cal-next" type="button" aria-label="Next month">›</button>
+            </div>
+          </div>
+          <table id="cal"><caption class="sr"></caption><thead></thead><tbody></tbody></table>
+          <p id="cal-note"></p>
+        </section>
+      </div>
+    </div>
+  </main>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

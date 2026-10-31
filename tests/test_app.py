@@ -117,3 +117,10 @@ def test_js_modules_are_served_as_javascript():
     # Windows can map .js to text/plain, which browsers reject for <script type="module">.
     r = client.get("/static/app.js")
     assert r.status_code == 200 and "javascript" in r.headers["content-type"]
+
+
+
+@pytest.mark.parametrize("lang,name", [("en", "English"), ("hi", "Hindi"), ("bn", "Bengali")])
+def test_language_rule_names_the_chosen_language(lang, name):
+    rule = main.language_rule(lang)
+    assert f"ONLY in {name}" in rule and "Never switch language" in rule

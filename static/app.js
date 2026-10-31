@@ -1,4 +1,4 @@
-"use strict";
+
 import {$, mk} from "./dom.js";
 import {LANGS, LOCALE, t} from "./i18n.js";
 import {emptyPlan, money, totals, openTasks, todayIso, parseDate, toIso} from "./plan.js";
@@ -156,9 +156,12 @@ async function send(text, shown = text) {
     wait.textContent = err.message || tr("error");
     state.ask = previous || fallbackAsk(); // let the user retry the same question
   } finally {
-    state.busy = false;
-    renderAll();
-    $("log").scrollTop = $("log").scrollHeight;
+      state.busy = false;
+      renderAll();
+      $("log").scrollTop = $("log").scrollHeight;
+      if (!document.activeElement || document.activeElement === document.body) { // keep keyboard users in the options
+        $("opts").querySelector("button:not(:disabled), input:not(:disabled)")?.focus({preventScroll: true});
+    }
   }
 }
 
@@ -213,18 +216,28 @@ function renderTips() {
   if (!state.alerts.length && !state.suggestions.length) tips.append(mk("p", "empty", tr("noTips")));
 }
 
+let drawn = {scene: "", lists: ""}; // what was last drawn, so unchanged panels are not rebuilt
+
 function renderAll() {
   const {plan} = state;
-  setTheme($("backdrop"), plan.event_type || "");
-  const open = openTasks(plan), next = open[0];
-  const done = plan.tasks.filter((x) => x.done).map((x) => x.title);
-  $("ground-hint").textContent = tr("groundEmpty");
-  ground(plan, next?.category, `${tr("ground")}: ${done.join(", ") || tr("groundEmpty")}`);
-  $("next-up").textContent = next ? `${tr("nextUp")}: ${next.title}` : "";
-  updateMemo(plan, state.totals, state.lang);
-  updateCalendar(plan, state.lang);
-  renderTasks();
-  renderTips();
+  const scene = JSON.stringify([plan, state.totals, state.lang]);
+  if (scene !== drawn.scene) {
+    drawn.scene = scene;
+    setTheme($("backdrop"), plan.event_type || "");
+    const next = openTasks(plan)[0];
+    const done = plan.tasks.filter((x) => x.done).map((x) => x.title);
+    $("ground-hint").textContent = tr("groundEmpty");
+    ground(plan, next?.category, `${tr("ground")}: ${done.join(", ") || tr("groundEmpty")}`);
+    $("next-up").textContent = next ? `${tr("nextUp")}: ${next.title}` : "";
+    updateMemo(plan, state.totals, state.lang);
+    updateCalendar(plan, state.lang);
+  }
+  const lists = JSON.stringify([plan, state.lang, state.busy, state.suggestions, state.alerts]);
+  if (lists !== drawn.lists) {
+    drawn.lists = lists;
+    renderTasks();
+    renderTips();
+  }
   renderAsk();
 }
 

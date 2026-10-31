@@ -10,13 +10,18 @@ import os
 import time
 from collections import defaultdict, deque
 from datetime import date
+from functools import lru_cache
+from http import HTTPStatus
 from pathlib import Path
-from typing import Literal, get_args
+from typing import Literal, TypedDict, get_args
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from google import genai
+from google.genai import types
 from pydantic import BaseModel, Field, field_validator
 
 load_dotenv()
@@ -32,6 +37,15 @@ Category = Literal["venue", "seating", "catering", "decor", "music", "photo", "r
                    "cake", "lighting", "invites", "transport", "stage"]
 MAX_MONEY = 100_000_000
 ISO_DATE = r"^\d{4}-\d{2}-\d{2}$"
+
+
+# Tunables, kept in one place so behaviour changes are one-line edits.
+RATE_LIMIT, RATE_WINDOW_S, MAX_TRACKED_CLIENTS = 20, 60, 10_000
+DUE_SOON_DAYS = 7
+MIN_OPTIONS, MAX_OPTIONS, MAX_OPTION_CHARS = 2, 6, 60
+MAX_REPLY_CHARS = 1500  # must fit Turn.text (2000) when the reply is sent back as history
+MAX_SUGGESTIONS, MAX_SUGGESTION_CHARS = 3, 90
+MODEL_TIMEOUT_MS, MAX_OUTPUT_TOKENS = 30_000, 4096
 
 SYSTEM = """You are a warm, proactive event-planning assistant for Indian celebrations:
 multi-day weddings, birthdays, and community events (society parties, competitions, festivals).
@@ -129,17 +143,25 @@ class Turn(BaseModel):
 
 class ChatIn(BaseModel):
     message: str = Field(min_length=1, max_length=1000)
-    plan: Plan = Field(default_factory=Plan)
+    plan: Plan = Field(default_factory=lambda: Plan.model_validate({}))
     history: list[Turn] = Field(default_factory=list, max_length=20)
     lang: str = "en"
 
 
-def totals(plan: Plan) -> dict:
+class Alert(TypedDict):
+    type: Literal["overdue", "due_soon"]
+    task: str
+    due: str
+    days: int
+
+
+def totals(plan: Plan) -> dict[str, int]:
     """Spent = done tasks (actual or estimate); pending = estimates of open tasks."""
     spent = sum(t.actual_cost if t.actual_cost is not None else t.est_cost for t in plan.tasks if t.done)
     pending = sum(t.est_cost for t in plan.tasks if not t.done)
     return {"spent": spent, "pending": pending, "planned": spent + pending,
             "remaining": plan.budget - spent - pending}
+
 
 def language_rule(lang: str) -> str:
     """Appended to the system prompt so the model cannot drift into another language."""
@@ -148,17 +170,17 @@ def language_rule(lang: str) -> str:
             f"Never switch language, even for Indian festivals or greetings, unless LANGUAGE changes.")
 
 
-def alerts(plan: Plan, today: date | None = None) -> list[dict]:
-    """Overdue and due-within-7-days tasks, computed here so the model cannot get dates wrong."""
+def alerts(plan: Plan, today: date | None = None) -> list[Alert]:
+    """Overdue and due-within-a-week tasks, computed here so the model cannot get dates wrong."""
     today = today or date.today()
-    found = []
+    found: list[Alert] = []
     for task in plan.tasks:
         if task.done or not task.due:
             continue
         days = (date.fromisoformat(task.due) - today).days
         if days < 0:
             found.append({"type": "overdue", "task": task.title, "due": task.due, "days": -days})
-        elif days <= 7:
+        elif days <= DUE_SOON_DAYS:
             found.append({"type": "due_soon", "task": task.title, "due": task.due, "days": days})
     return sorted(found, key=lambda a: a["due"])[:3]
 
@@ -172,44 +194,60 @@ def clean_ask(raw: object) -> dict | None:
     opts = raw.get("options")
     if not isinstance(opts, list):
         return None
-    opts = [str(o).strip()[:60] for o in opts if str(o).strip()][:6]
-    return {"kind": raw["kind"], "options": opts} if len(opts) >= 2 else None
+    opts = [str(o).strip()[:MAX_OPTION_CHARS] for o in opts if str(o).strip()][:MAX_OPTIONS]
+    return {"kind": raw["kind"], "options": opts} if len(opts) >= MIN_OPTIONS else None
+
+
+@lru_cache(maxsize=1)
+def gemini_client(api_key: str) -> genai.Client:
+    """One shared client: rebuilding it per request wastes time, and a temporary one is closed mid-call."""
+    options = types.HttpOptions(timeout=MODEL_TIMEOUT_MS, retry_options=types.HttpRetryOptions(attempts=2))
+    return genai.Client(api_key=api_key, http_options=options)
+
+
+# Skip "thinking" on 2.5 Flash models: planning is structured output, and thinking only adds latency and cost.
+THINKING = types.ThinkingConfig(thinking_budget=0) if "2.5-flash" in MODEL else None
 
 
 def ask_gemini(body: ChatIn) -> dict:
-    from google import genai
-    from google.genai import types
-
+    """One Gemini call: the plan goes in as compact JSON, the updated plan comes back as JSON."""
     key = os.getenv("GEMINI_API_KEY")
     if not key:
         raise RuntimeError("GEMINI_API_KEY is not set")
     ctx = (f"TODAY: {date.today()}\nLANGUAGE: {LANGS[body.lang]} (all text must be in {LANGS[body.lang]})\n"
-           f"CURRENT_PLAN: {body.plan.model_dump_json()}\nTOTALS: {json.dumps(totals(body.plan))}\n"
+           f"CURRENT_PLAN: {body.plan.model_dump_json(exclude_none=True)}\nTOTALS: {json.dumps(totals(body.plan))}\n"
            f"ALERTS: {json.dumps(alerts(body.plan))}\n"
            f"USER: {body.message}")
     contents = [types.Content(role=h.role, parts=[types.Part(text=h.text)]) for h in body.history]
     contents.append(types.Content(role="user", parts=[types.Part(text=ctx)]))
-    client = genai.Client(api_key=key)  # keep a reference: a temporary client gets closed mid-call
-    resp = client.models.generate_content(
+    resp = gemini_client(key).models.generate_content(
         model=MODEL, contents=contents,
-        config=types.GenerateContentConfig(system_instruction=SYSTEM + language_rule(body.lang), temperature=0.6,
-                                           response_mime_type="application/json"))
-    return json.loads(resp.text)
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM + language_rule(body.lang), temperature=0.6,
+            response_mime_type="application/json", max_output_tokens=MAX_OUTPUT_TOKENS,
+            thinking_config=THINKING))
+    return json.loads(resp.text or "")
 
 
-_hits: dict[str, deque] = defaultdict(deque)
+_hits: dict[str, deque[float]] = defaultdict(deque)
 
 
-def rate_limit(ip: str, limit: int = 20, window: int = 60) -> None:
-    now, q = time.time(), _hits[ip]
-    while q and now - q[0] > window:
+def rate_limit(ip: str) -> None:
+    """Sliding-window limiter per client IP; idle clients are purged only when the table grows large."""
+    now = time.time()
+    if len(_hits) > MAX_TRACKED_CLIENTS:
+        for stale in [k for k, q in _hits.items() if not q or now - q[-1] > RATE_WINDOW_S]:
+            del _hits[stale]
+    q = _hits[ip]
+    while q and now - q[0] > RATE_WINDOW_S:
         q.popleft()
-    if len(q) >= limit:
-        raise HTTPException(429, "Too many requests. Please wait a minute.")
+    if len(q) >= RATE_LIMIT:
+        raise HTTPException(HTTPStatus.TOO_MANY_REQUESTS, "Too many requests. Please wait a minute.")
     q.append(now)
 
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
 @app.middleware("http")
@@ -230,8 +268,8 @@ def chat(body: ChatIn, request: Request) -> dict:
     try:
         raw = ask_gemini(body)
         plan = Plan.model_validate(raw["plan"])
-        reply = str(raw["reply"])[:1500]  # must fit Turn.text (2000) when sent back as history
-        suggestions = [str(s).strip()[:90] for s in raw.get("suggestions", []) if str(s).strip()][:3]
+        reply = str(raw["reply"])[:MAX_REPLY_CHARS]
+        suggestions = [str(s).strip()[:MAX_SUGGESTION_CHARS] for s in raw.get("suggestions", []) if str(s).strip()]
         ask = clean_ask(raw.get("ask"))
     except RuntimeError as exc:
         log.error("config error: %s", exc)
@@ -241,11 +279,11 @@ def chat(body: ChatIn, request: Request) -> dict:
         raise HTTPException(502, "The AI sent an unreadable answer. Please try again.") from exc
     except Exception as exc:  # network / quota
         log.exception("gemini call failed")
-        if getattr(exc, "code", None) == 429:
-            raise HTTPException(429, "AI daily limit reached. Try again later.") from exc
+        if getattr(exc, "code", None) == HTTPStatus.TOO_MANY_REQUESTS:
+            raise HTTPException(HTTPStatus.TOO_MANY_REQUESTS, "AI daily limit reached. Try again later.") from exc
         raise HTTPException(502, "AI service is unavailable. Please try again.") from exc
     return {"reply": reply, "plan": plan.model_dump(), "totals": totals(plan), "ask": ask,
-            "suggestions": suggestions, "alerts": alerts(plan)}
+            "suggestions": suggestions[:MAX_SUGGESTIONS], "alerts": alerts(plan)}
 
 
 @app.get("/")

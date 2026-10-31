@@ -31,3 +31,31 @@ pytest                          # backend tests (Gemini is mocked)
 - **Accessibility:** labelled controls, `aria-live` chat log, options are real buttons (`aria-pressed` for multi-select), calendar days have full spoken labels, the scene has a text label listing finished tasks, budget state is text not only colour, visible focus, reduced-motion support, `lang` follows the chosen language.
 - **Languages:** English, Hindi, Bengali, Tamil, Telugu, Marathi, Gujarati, Kannada.
 - **Testing:** pytest covers totals, alerts, validation, error paths, rate limit, headers and JS MIME type.
+
+
+## Architecture
+```
+Browser (static/*.js modules)  --POST /api/chat-->  FastAPI (main.py)  -->  Gemini API
+   app.js  state + chat                              validate (Pydantic)
+   ground.js / memo.js / calendar.js                 recompute totals + alerts
+   backdrop.js (themes), i18n.js (8 languages)       rate limit, security headers, gzip
+```
+
+## Performance
+- One shared Gemini client, a 30 s timeout and a capped output size; "thinking" is off for 2.5 Flash models because planning is structured output.
+- The plan is sent as compact JSON (empty fields dropped) and only the last 12 turns are kept.
+- Responses are gzipped, module scripts are preloaded, and panels are redrawn only when their data changed.
+- The rate limiter purges idle clients so memory stays bounded.
+
+## Checks
+```bash
+ruff check . && mypy main.py   # lint and types
+pytest -q                      # backend tests (27)
+node --test                    # frontend logic tests (Node 22+)
+```
+CI runs all of these on every push (`.github/workflows/ci.yml`).
+
+## Limitations
+- Plans live in the browser only; refreshing the page starts over (use Start over for a clean run).
+- Free Gemini keys have a small daily request quota; the app shows a clear message when it is used up.
+- Task prices are estimates from the model, not live vendor quotes.

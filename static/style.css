@@ -216,3 +216,9 @@ main{position:relative;z-index:1;display:grid;grid-template-columns:minmax(290px
   .cal-head{margin-bottom:.2rem}
   #cal-note{margin-top:.3rem;font-size:.85rem}
 }
+
+
+/* ---- keyboard skip link + lighter backdrop on small screens ---- */
+.skip{position:absolute;left:-999px;top:0;z-index:20;padding:.4rem .8rem;background:var(--gold);color:var(--ink);font-weight:600}
+.skip:focus{left:0}
+@media (max-width:700px){.bd:nth-child(n+7){display:none}}

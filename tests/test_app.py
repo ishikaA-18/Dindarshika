@@ -124,3 +124,33 @@ def test_js_modules_are_served_as_javascript():
 def test_language_rule_names_the_chosen_language(lang, name):
     rule = main.language_rule(lang)
     assert f"ONLY in {name}" in rule and "Never switch language" in rule
+
+
+
+def test_responses_are_gzipped():
+    r = client.get("/", headers={"Accept-Encoding": "gzip"})
+    assert r.headers["content-encoding"] == "gzip"
+
+
+def test_gemini_client_is_created_once():
+    main.gemini_client.cache_clear()
+    assert main.gemini_client("test-key") is main.gemini_client("test-key")
+
+
+def test_rate_limiter_purges_idle_clients_when_table_is_large(monkeypatch):
+    monkeypatch.setattr(main, "MAX_TRACKED_CLIENTS", 2)
+    for i in range(3):
+        main._hits[f"10.0.0.{i}"].append(0.0)  # long idle
+    main.rate_limit("10.0.0.9")
+    assert list(main._hits) == ["10.0.0.9"]
+
+
+def test_quota_error_maps_to_429(monkeypatch):
+    class QuotaError(Exception):
+        code = 429
+
+    def boom(body):
+        raise QuotaError("RESOURCE_EXHAUSTED")
+    monkeypatch.setattr(main, "ask_gemini", boom)
+    r = client.post("/api/chat", json={"message": "hi"})
+    assert r.status_code == 429 and "daily limit" in r.json()["detail"]

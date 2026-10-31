@@ -1,0 +1,22 @@
+[project]
+name = "dindarshika"
+version = "2.0.0"
+description = "AI celebration and event planner (FastAPI + Gemini)"
+requires-python = ">=3.10"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "C4", "PLR"]
+
+[tool.ruff.lint.per-file-ignores]
+"main.py" = ["E501"]                 # the system prompt is prose; wrapping it would change what the model reads
+"tests/*" = ["PLR2004", "E501"]      # literal numbers in assertions are the point of a test
+
+[tool.mypy]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

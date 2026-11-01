@@ -257,6 +257,8 @@ async def security_headers(request: Request, call_next):
         "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'")
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["Referrer-Policy"] = "no-referrer"
+    if request.url.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "public, max-age=3600"
     return resp
 
 
